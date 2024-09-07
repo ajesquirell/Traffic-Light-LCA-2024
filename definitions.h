@@ -1,5 +1,7 @@
 #pragma once
 
+#define ESPNOW_WIFI_CHANNEL 6
+
 enum DeviceType
 {
     DEVICE_TYPE_STATION,
@@ -19,14 +21,30 @@ enum ButtonCode
 
 enum TrafficSignalColor
 {
-    TRAFFIC_SIGNAL_RED = 0x01,
-    TRAFFIC_SIGNAL_YELLOW = 0x02,
-    TRAFFIC_SIGNAL_GREEN = 0x04,
+    STATION_OUTPUT_RED = 0x01,
+    STATION_OUTPUT_YELLOW = 0x02,
+    STATION_OUTPUT_GREEN = 0x04,
+};
+
+enum TrafficSignalMode
+{
+    MODE_REMOTE,
+    MODE_DRUM_SENSOR
 };
 
 typedef struct
 {
-    DeviceType type;
-    unsigned char outputs;
-    unsigned char button_code;
-} __attribute__((packed)) payload_t;
+    DeviceType from;
+    DeviceType to;
+} __attribute__((packed)) broadcast_payload_t;
+
+typedef struct
+{
+    uint8_t button_code;
+} __attribute__((packed)) remote_payload_t;
+
+typedef struct
+{
+    TrafficSignalMode mode;
+    uint8_t outputs;
+} __attribute__((packed)) main_station_payload_t;

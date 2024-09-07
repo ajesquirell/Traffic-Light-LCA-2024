@@ -1,8 +1,8 @@
 /**
- * @file remote.ino
+ * @file drum_sensor.ino
  * @author Austin Esquirell (ajesquirell@yahoo.com)
- * @brief Firmware for Traffic Light Remote
- * @version 0.2
+ * @brief Firmware for Traffic Light Bass Drum Sensor Module
+ * @version 0.1
  * @date 2024-09-07
  * 
  * @copyright Copyright (c) 2024
@@ -15,25 +15,9 @@
 #include "../definitions.h"
 
 // GPIO definitions
-#define N_BUTTONS 6
+#define INPUT_SENSOR D0
 
-#define BTN_RED D2
-#define BTN_YLW D1
-#define BTN_GRN D0
-#define BTN_BLU D7
-#define BTN_WHT D8
-#define BTN_BLK D9
-
-#define LED_RED D6
-#define LED_YLW D5
-#define LED_GRN D4
-#define LED_BLU D3
-
-uint8_t curr_buttons = 0;
-uint8_t prev_buttons = 0;
-
-uint8_t buttons[N_BUTTONS] = {BTN_RED, BTN_YLW, BTN_GRN, BTN_BLU , BTN_WHT, BTN_BLK};
-ButtonCode button_code_map[N_BUTTONS] = {BUTTON_CODE_RED, BUTTON_CODE_YLW, BUTTON_CODE_GRN, BUTTON_CODE_BLU, BUTTON_CODE_WHT, BUTTON_CODE_BLK};
+bool triggered = false;
 
 ESP_NOW_Broadcast_Peer broadcast_peer;
 broadcast_payload_t broadcast_payload;
@@ -54,9 +38,10 @@ public:
     return true;
   }
 
-  bool sendMessage(const remote_payload_t& payload) {
-    if (!send((uint8_t *)&payload, sizeof(payload))) {
-      log_e("Failed to send message to station");
+  bool sendPulse() {
+    uint8_t dummy = 0;
+    if (!send(&dummy, 1)) {
+      log_e("Failed to send pulse message to station");
       return false;
     }
     return true;
@@ -64,26 +49,16 @@ public:
 
   void onReceive(const uint8_t *data, size_t len, bool broadcast) {
     log_v("Received a message from station " MACSTR " (%s)\n", MAC2STR(addr()), broadcast ? "broadcast" : "unicast");
-    if (broadcast) {
-      // Known peer asking for connection. Broadcast back so it can connect to this mac addr.
-      if (len == sizeof(broadcast_payload_t) && ((broadcast_payload_t*)data)->to == DEVICE_TYPE_REMOTE) {
-        broadcast_peer.sendMessage(broadcast_payload);
-      }
+
+    if (!broadcast) {
+      log_v("Received non-broadcast message from station. Ignoring...");
       return;
     }
-
-    if (len < sizeof(main_station_payload_t)) {
-      log_e("Invalid message size received from station");
-      return;
+    
+    // Known peer asking for connection. Broadcast back so it can connect to this mac addr.
+    if (len == sizeof(broadcast_payload_t) && ((broadcast_payload_t*)data)->to == DEVICE_TYPE_DRUM_SENSOR) {
+      broadcast_peer.sendMessage(broadcast_payload);
     }
-
-    main_station_payload_t* payload = (main_station_payload_t*)data;
-
-    digitalWrite(LED_RED, payload->outputs & STATION_OUTPUT_RED);
-    digitalWrite(LED_YLW, payload->outputs & STATION_OUTPUT_YELLOW);
-    digitalWrite(LED_GRN, payload->outputs & STATION_OUTPUT_GREEN);
-
-    digitalWrite(LED_BLU, payload->mode == MODE_DRUM_SENSOR);
   }
 };
 
@@ -118,6 +93,16 @@ void on_new_connection(const esp_now_recv_info_t *info, const uint8_t *data, int
   }
 }
 
+unsigned long now = 0;
+unsigned long last = 0;
+void IRAM_ATTR isr() {
+  now = millis();
+  if (now - last > 150) {
+    triggered = true;
+    last = now;
+  }
+}
+
 void setup() {
   // Initialize the Wi-Fi module
   WiFi.enableLongRange(true);
@@ -127,7 +112,7 @@ void setup() {
     delay(100);
   }
 
-  log_i("ESP-NOW Traffic Light Remote\n");
+  log_i("ESP-NOW Traffic Light Bass Drum Sensor\n");
   log_i("Wi-Fi parameters:\n");
   log_i("  Mode: STA\n");
   log_i("  MAC Address: " MACSTR "\n", MAC2STR(WiFi.macAddress()));
@@ -151,28 +136,14 @@ void setup() {
   }
 
   // GPIO
-  pinMode(BTN_RED, INPUT_PULLUP);
-  pinMode(BTN_YLW, INPUT_PULLUP);
-  pinMode(BTN_GRN, INPUT_PULLUP);
-  pinMode(BTN_BLU, INPUT_PULLUP);
-  pinMode(BTN_WHT, INPUT_PULLUP);
-  pinMode(BTN_BLK, INPUT_PULLUP);
-
-  pinMode(LED_RED, OUTPUT);
-  pinMode(LED_YLW, OUTPUT);
-  pinMode(LED_GRN, OUTPUT);
-  pinMode(LED_BLU, OUTPUT);
-
-  digitalWrite(LED_RED, LOW);
-  digitalWrite(LED_YLW, LOW);
-  digitalWrite(LED_GRN, LOW);
-  digitalWrite(LED_BLU, LOW);
+  pinMode(INPUT_SENSOR, INPUT_PULLUP);
+  attachInterrupt(INPUT_SENSOR, isr, FALLING);
 
   // Built-in LED used as connection status indicator
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH);
 
-  broadcast_payload.from = DEVICE_TYPE_REMOTE;
+  broadcast_payload.from = DEVICE_TYPE_DRUM_SENSOR;
   broadcast_payload.to = DEVICE_TYPE_STATION;
 }
 
@@ -185,21 +156,11 @@ void loop() {
     return;
   }
 
-  for (int i = 0; i < N_BUTTONS; i++) {
-    if (digitalRead(buttons[i]) == LOW) {
-      curr_buttons |= button_code_map[i];
-    } else {
-      curr_buttons &= ~button_code_map[i];
-    }
+  if (triggered) {
+    station_peer.sendPulse();
+    triggered = false;
   }
 
-  if (station_peer && curr_buttons && curr_buttons != prev_buttons) {
-    remote_payload_t payload;
-    payload.button_code = curr_buttons;
-    station_peer.sendMessage(payload);
-  }
-
-  prev_buttons = curr_buttons;
-
-  delay(1);
+  delay(50);
 }
+
