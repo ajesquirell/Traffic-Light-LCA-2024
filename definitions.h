@@ -1,6 +1,6 @@
 #pragma once
 
-#define ESPNOW_WIFI_CHANNEL 6
+#define ESPNOW_WIFI_CHANNEL 1
 
 enum DeviceType
 {
@@ -36,6 +36,7 @@ typedef struct
 {
     DeviceType from;
     DeviceType to;
+    bool is_ack = false;
 } __attribute__((packed)) broadcast_payload_t;
 
 typedef struct
