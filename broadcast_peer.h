@@ -20,7 +20,7 @@ public:
   }
 
   bool sendMessage(const broadcast_payload_t& data) {
-    if (!send((uint8_t *)&data, sizeof(broadcast_payload_t))) {
+    if (!send((uint8_t *)&data, sizeof(data))) {
       log_e("Failed to broadcast message");
       return false;
     }

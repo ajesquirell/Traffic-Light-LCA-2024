@@ -16,7 +16,10 @@ enum ButtonCode
     BUTTON_CODE_GRN = 0x04,
     BUTTON_CODE_BLU = 0x08,
     BUTTON_CODE_WHT = 0x10,
-    BUTTON_CODE_BLK = 0x20
+    BUTTON_CODE_BLK = 0x20,
+
+    // Put heartbeat bit here to keep remote_payload_t as small as possible
+    BUTTON_CODE_HEARTBEAT = 0x80
 };
 
 enum TrafficSignalColor

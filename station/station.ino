@@ -2,8 +2,8 @@
  * @file station.ino
  * @author Austin Esquirell (ajesquirell@yahoo.com)
  * @brief Firmware for Traffic Light Main Station
- * @version 0.2
- * @date 2024-09-07
+ * @version 0.3
+ * @date 2024-09-18
  * 
  * @copyright Copyright (c) 2024
  * 
@@ -26,7 +26,14 @@ TrafficSignalMode curr_mode = MODE_REMOTE;
 TrafficSignalMode prev_mode = MODE_REMOTE;
 
 ESP_NOW_Broadcast_Peer broadcast_peer;
-broadcast_payload_t broadcast_payload;
+
+bool send_connection_request(DeviceType device_type_to, bool is_ack = false) {
+  broadcast_payload_t payload;
+  payload.from = DEVICE_TYPE_STATION;
+  payload.to = device_type_to;
+  payload.is_ack = is_ack;
+  return broadcast_peer.sendMessage(payload);
+}
 
 class ESP_NOW_Remote_Peer : public ESP_NOW_Peer {
 public:
@@ -56,12 +63,11 @@ public:
     return true;
   }
 
-  void onReceive(const uint8_t *data, size_t len, bool broadcast) {
-    log_v("Received a message from remote " MACSTR " (%s)\n", MAC2STR(addr()), broadcast ? "broadcast" : "unicast");
+  virtual void onReceive(const uint8_t *data, size_t len, bool broadcast) {
+    log_v("Received %d bytes from remote " MACSTR " (%s)\n", len, MAC2STR(addr()), broadcast ? "broadcast" : "unicast");
     if (broadcast) {
       // Known peer asking for connection. Broadcast back so it can connect to this mac addr.
-      broadcast_payload.to = DEVICE_TYPE_REMOTE;
-      broadcast_peer.sendMessage(broadcast_payload);
+      send_connection_request(DEVICE_TYPE_REMOTE, true);
       sendState();
       return;
     }
@@ -72,6 +78,8 @@ public:
 
     remote_payload_t* payload = (remote_payload_t*)data;
 
+    if (payload->button_code & BUTTON_CODE_HEARTBEAT) return;
+
     if (payload->button_code & BUTTON_CODE_BLU) {
       curr_mode = curr_mode == MODE_REMOTE ? MODE_DRUM_SENSOR : MODE_REMOTE;
     }
@@ -81,6 +89,8 @@ public:
       payload->button_code & BUTTON_CODE_YLW ? curr_outputs |= STATION_OUTPUT_YELLOW : curr_outputs &= ~STATION_OUTPUT_YELLOW;
       payload->button_code & BUTTON_CODE_GRN ? curr_outputs |= STATION_OUTPUT_GREEN : curr_outputs &= ~STATION_OUTPUT_GREEN;
     }
+
+    sendState();
   }
 };
 
@@ -108,12 +118,11 @@ public:
     return true;
   }
 
-  void onReceive(const uint8_t *data, size_t len, bool broadcast) {
-    log_v("Received a message from bass drum sensor " MACSTR " (%s)\n", MAC2STR(addr()), broadcast ? "broadcast" : "unicast");
+  virtual void onReceive(const uint8_t *data, size_t len, bool broadcast) {
+    log_v("Received %d bytes from bass drum sensor " MACSTR " (%s)\n", len, MAC2STR(addr()), broadcast ? "broadcast" : "unicast");
     if (broadcast) {
       // Known peer asking for connection. Broadcast back so it can connect to this mac addr.
-      broadcast_payload.to = DEVICE_TYPE_DRUM_SENSOR;
-      broadcast_peer.sendMessage(broadcast_payload);
+      send_connection_request(DEVICE_TYPE_DRUM_SENSOR, true);
       return;
     }
 
@@ -193,11 +202,14 @@ void setup() {
     delay(100);
   }
 
-  log_i("ESP-NOW Traffic Light Main Station\n");
-  log_i("Wi-Fi parameters:\n");
-  log_i("  Mode: STA\n");
-  log_i("  MAC Address: " MACSTR "\n", MAC2STR(WiFi.macAddress()));
-  log_i("  Channel: %d\n", ESPNOW_WIFI_CHANNEL);
+  WiFi.setSleep(false);
+  WiFi.setTxPower(WIFI_POWER_21dBm);
+
+  log_i("ESP-NOW Traffic Light Main Station");
+  log_i("Wi-Fi parameters:");
+  log_i("  Mode: STA");
+  log_i("  MAC Address: " MACSTR, MAC2STR(WiFi.macAddress()));
+  log_i("  Channel: %d", ESPNOW_WIFI_CHANNEL);
 
   // Initialize the ESP-NOW protocol
   if (!ESP_NOW.begin()) {
@@ -215,24 +227,20 @@ void setup() {
     delay(200);
     ESP.restart();
   }
-
-  broadcast_payload.from = DEVICE_TYPE_STATION;
 }
 
 unsigned long broadcast_timer = 0;
 
 void loop() {
   // Broadcast myself to network while peers are unknown
-  if (millis() - broadcast_timer > 100) {
+  if (millis() - broadcast_timer > 200) {
     bool no_connection = false;
     if (!remote_peer) {
-      broadcast_payload.to = DEVICE_TYPE_REMOTE;
-      broadcast_peer.sendMessage(broadcast_payload);
+      send_connection_request(DEVICE_TYPE_REMOTE);
       no_connection = true;
     }
     if (!drum_peer) {
-      broadcast_payload.to = DEVICE_TYPE_DRUM_SENSOR;
-      broadcast_peer.sendMessage(broadcast_payload);
+      send_connection_request(DEVICE_TYPE_DRUM_SENSOR);
       no_connection = true;
     }
     if(no_connection) {
