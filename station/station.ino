@@ -2,8 +2,8 @@
  * @file station.ino
  * @author Austin Esquirell (ajesquirell@yahoo.com)
  * @brief Firmware for Traffic Light Main Station
- * @version 0.3
- * @date 2024-09-18
+ * @version 0.4
+ * @date 2024-09-19
  * 
  * @copyright Copyright (c) 2024
  * 
@@ -19,11 +19,30 @@
 #define OUT_YLW D1
 #define OUT_GRN D0
 
+enum DrumSequence {
+  DRUM_SEQUENCE_DOWN_UP,
+  DRUM_SEQUENCE_DOWN
+};
+
+enum Effect {
+  EFFECT_NONE,
+  EFFECT_TRAIN,
+  EFFECT_TURN_SIGNAL
+};
+
 uint8_t curr_outputs = 0;
 uint8_t prev_outputs = 0;
 
 TrafficSignalMode curr_mode = MODE_REMOTE;
 TrafficSignalMode prev_mode = MODE_REMOTE;
+
+DrumSequence curr_drum_sequence = DRUM_SEQUENCE_DOWN_UP;
+
+Effect curr_effect = EFFECT_NONE;
+unsigned long effect_timer = 0;
+int effect_state = 0;
+int effect_cnt = 0;
+uint8_t outputs_before_effect = 0;
 
 ESP_NOW_Broadcast_Peer broadcast_peer;
 
@@ -33,6 +52,19 @@ bool send_connection_request(DeviceType device_type_to, bool is_ack = false) {
   payload.to = device_type_to;
   payload.is_ack = is_ack;
   return broadcast_peer.sendMessage(payload);
+}
+
+void start_effect(Effect effect) {
+  if (effect == EFFECT_NONE && curr_effect != EFFECT_NONE) {
+    curr_outputs = outputs_before_effect;
+  } else {
+    outputs_before_effect = curr_outputs;
+  }
+
+  curr_effect = effect;
+  effect_timer = 0;
+  effect_state = 0;
+  effect_cnt = 0;
 }
 
 class ESP_NOW_Remote_Peer : public ESP_NOW_Peer {
@@ -80,14 +112,31 @@ public:
 
     if (payload->button_code & BUTTON_CODE_HEARTBEAT) return;
 
+    start_effect(EFFECT_NONE);
+
     if (payload->button_code & BUTTON_CODE_BLU) {
       curr_mode = curr_mode == MODE_REMOTE ? MODE_DRUM_SENSOR : MODE_REMOTE;
     }
 
     if (curr_mode == MODE_REMOTE) {
-      payload->button_code & BUTTON_CODE_RED ? curr_outputs |= STATION_OUTPUT_RED : curr_outputs &= ~STATION_OUTPUT_RED;
-      payload->button_code & BUTTON_CODE_YLW ? curr_outputs |= STATION_OUTPUT_YELLOW : curr_outputs &= ~STATION_OUTPUT_YELLOW;
-      payload->button_code & BUTTON_CODE_GRN ? curr_outputs |= STATION_OUTPUT_GREEN : curr_outputs &= ~STATION_OUTPUT_GREEN;
+      if (payload->button_code & BUTTON_CODE_WHT) {
+        start_effect(EFFECT_TRAIN);
+      } else if (payload->button_code & BUTTON_CODE_BLK) {
+        start_effect(EFFECT_TURN_SIGNAL);
+      } else {
+        // Normal color control
+        payload->button_code & BUTTON_CODE_RED ? curr_outputs |= STATION_OUTPUT_RED : curr_outputs &= ~STATION_OUTPUT_RED;
+        payload->button_code & BUTTON_CODE_YLW ? curr_outputs |= STATION_OUTPUT_YELLOW : curr_outputs &= ~STATION_OUTPUT_YELLOW;
+        payload->button_code & BUTTON_CODE_GRN ? curr_outputs |= STATION_OUTPUT_GREEN : curr_outputs &= ~STATION_OUTPUT_GREEN;
+      }
+    } else {
+      if (payload->button_code & BUTTON_CODE_WHT) {
+        curr_drum_sequence = DRUM_SEQUENCE_DOWN_UP;
+      }
+
+      if (payload->button_code & BUTTON_CODE_BLK) {
+        curr_drum_sequence = DRUM_SEQUENCE_DOWN;
+      }
     }
 
     sendState();
@@ -129,13 +178,33 @@ public:
     if (curr_mode != MODE_DRUM_SENSOR) {
       return;
     }
-    
-    if (curr_outputs & STATION_OUTPUT_RED) {
-      curr_outputs = STATION_OUTPUT_YELLOW;
-    } else if (curr_outputs & STATION_OUTPUT_YELLOW) {
-      curr_outputs = STATION_OUTPUT_GREEN;
-    } else {
-      curr_outputs = STATION_OUTPUT_RED;
+
+    switch (curr_drum_sequence) {
+      case DRUM_SEQUENCE_DOWN_UP: {
+        static bool sequence_flag = false;
+        if (curr_outputs == 0) {
+          curr_outputs = STATION_OUTPUT_RED;
+        } else if (curr_outputs & STATION_OUTPUT_RED) {
+          curr_outputs = STATION_OUTPUT_YELLOW;
+          sequence_flag = true;
+        } else if (curr_outputs & STATION_OUTPUT_YELLOW) {
+          curr_outputs = sequence_flag ? STATION_OUTPUT_GREEN : STATION_OUTPUT_RED;
+        } else {
+          curr_outputs = STATION_OUTPUT_YELLOW;
+          sequence_flag = false;
+        }
+        break;
+      }
+      case DRUM_SEQUENCE_DOWN: {
+        if (curr_outputs & STATION_OUTPUT_RED) {
+          curr_outputs = STATION_OUTPUT_YELLOW;
+        } else if (curr_outputs & STATION_OUTPUT_YELLOW) {
+          curr_outputs = STATION_OUTPUT_GREEN;
+        } else {
+          curr_outputs = STATION_OUTPUT_RED;
+        }
+        break;
+      }
     }
   }
 };
@@ -247,6 +316,58 @@ void loop() {
       digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
     }
     broadcast_timer = millis();
+  }
+
+  // Effects handling
+  switch (curr_effect) {
+    case EFFECT_TRAIN: {
+      const int bpm = 196;
+      constexpr unsigned long ms_wait = (1 / (float)bpm) * 60 * 1000;
+      if (millis() - effect_timer > ms_wait) {
+        switch (effect_state) {
+          case 0: {
+            curr_outputs = STATION_OUTPUT_RED;
+            effect_state = 1;
+            break;
+          }
+          case 1: {
+            curr_outputs = STATION_OUTPUT_YELLOW;
+            effect_state = 0;
+            break;
+          }
+        }
+        effect_timer = millis();
+        ++effect_cnt;
+        if (effect_cnt > 12) {
+          start_effect(EFFECT_NONE);
+        }
+      }
+      break;
+    }
+    case EFFECT_TURN_SIGNAL: {
+      const int bpm = 156;
+      constexpr unsigned long ms_wait = (1 / (float)bpm) * 60 * 1000;
+      if (millis() - effect_timer > ms_wait) {
+        switch (effect_state) {
+          case 0: {
+            curr_outputs = STATION_OUTPUT_RED | STATION_OUTPUT_YELLOW | STATION_OUTPUT_GREEN;
+            effect_state = 1;
+            break;
+          }
+          case 1: {
+            curr_outputs = 0;
+            effect_state = 0;
+            break;
+          }
+        }
+        effect_timer = millis();
+        ++effect_cnt;
+        if (effect_cnt > 8) {
+          start_effect(EFFECT_NONE);
+        }
+      }
+      break;
+    }
   }
 
   digitalWrite(OUT_RED, curr_outputs & STATION_OUTPUT_RED);
