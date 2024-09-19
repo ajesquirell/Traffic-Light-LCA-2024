@@ -44,6 +44,8 @@ int effect_state = 0;
 int effect_cnt = 0;
 uint8_t outputs_before_effect = 0;
 
+bool remote_state_received_success = true;
+
 ESP_NOW_Broadcast_Peer broadcast_peer;
 
 bool send_connection_request(DeviceType device_type_to, bool is_ack = false) {
@@ -138,8 +140,13 @@ public:
         curr_drum_sequence = DRUM_SEQUENCE_DOWN;
       }
     }
+  }
 
-    sendState();
+  virtual void onSent(bool success) override {
+    log_v("Message transmission to peer " MACSTR " %s", MAC2STR(addr()), success ? "successful" : "failed");
+
+    // Unicast has built-in acknowledgements in ESPNOW, so success here means it has been received
+    remote_state_received_success = success;
   }
 };
 
@@ -298,11 +305,11 @@ void setup() {
   }
 }
 
-unsigned long broadcast_timer = 0;
+unsigned long connection_msg_timer = 0;
 
 void loop() {
   // Broadcast myself to network while peers are unknown
-  if (millis() - broadcast_timer > 200) {
+  if (millis() - connection_msg_timer > 200) {
     bool no_connection = false;
     if (!remote_peer) {
       send_connection_request(DEVICE_TYPE_REMOTE);
@@ -315,7 +322,12 @@ void loop() {
     if(no_connection) {
       digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
     }
-    broadcast_timer = millis();
+
+    if (!remote_state_received_success && remote_peer) {
+      remote_peer.sendState();
+    }
+
+    connection_msg_timer = millis();
   }
 
   // Effects handling
