@@ -215,6 +215,30 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH);
 
+  // Use extenal antenna (from https://wiki.seeedstudio.com/xiao_esp32c6_getting_started/)
+  // Unless button combo is held
+  if (digitalRead(BTN_BLU) == LOW) {
+    pinMode(3, OUTPUT);
+    digitalWrite(3, LOW);//turn on this function
+    delay(100);
+    pinMode(14, OUTPUT); 
+    digitalWrite(14, LOW);//use internal antenna
+  } else {
+    pinMode(3, OUTPUT);
+    digitalWrite(3, LOW);//turn on this function
+    delay(100);
+    pinMode(14, OUTPUT); 
+    digitalWrite(14, HIGH);//use external antenna
+
+    for (int i = 0; i < 5; i++) {
+      digitalWrite(LED_RED, i % 2 == 1);
+      digitalWrite(LED_YLW, i % 2 == 1);
+      digitalWrite(LED_GRN, i % 2 == 1);
+      digitalWrite(LED_BLU, i % 2 == 1);
+      delay(300);
+    }
+  }
+
   // Deep Sleep (only RED, YELLOW, and GREEN are RTC pins)
   esp_deep_sleep_enable_gpio_wakeup(BIT(BTN_RED) | BIT(BTN_YLW) | BIT(BTN_GRN), ESP_GPIO_WAKEUP_GPIO_LOW);
 
